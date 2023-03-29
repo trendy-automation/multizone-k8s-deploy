@@ -1,3 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tst-namespace
+  
 ---
 kind: Role
 apiVersion: rbac.authorization.k8s.io/v1
@@ -5,66 +10,80 @@ metadata:
   name: scaling-role
   namespace: tst-namespace
 rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments/scale""]
-    verbs: ["patch"]
-
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
+    
 ---
-kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
 metadata:
-
   name: salme-pods
   namespace: tst-namespace
 subjects:
 - kind: ServiceAccount
-  name: deployment-scaler
+  name: scheduled-autoscaler-service-account
   namespace: tst-namespace
 roleRef:
   kind: Role
   name: scaling-role
-  apiGroup: rbac.authorization.k8s.io
+  apiGroup: ""
+
 
 ---
+apiVersion: v1
 kind: ServiceAccount
-metada:
-  name: deployment-scaler
+metadata:
+  name: scheduled-autoscaler-service-account
 
 # <- приложение имеет дневной цикл по нагрузке – ночью запросов на порядки меньше, пик – днём
-
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: scale-up
+  name: adwords-api-scale-up-cron-job
 spec:
-  schedule: "* 10 * * *"
+  schedule: "* 7 * * *"
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 100
       template:
         spec:
-          serviceAccount: deployment-scaler
-          ...
-            command: kubectl scale --replicas=4 deployment webapp-deployment
+          serviceAccountName: scheduled-autoscaler-service-account
+          containers:
+          - name: scale-up-container
+            image: nginx:1.23.4
+            command:
+              - bash
+            args:
+              - kubectl scale --replicas=4 deployment/webapp-deployment
+          restartPolicy: OnFailure
 
 ---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: scale-down
+  name: adwords-api-scale-down-cron-job
 spec:
   schedule: "* 23 * * *"
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 100
       template:
         spec:
-          serviceAccount: deployment-scaler
-          ...
-            command: kubectl scale --replicas=2 deployment webapp-deployment
-
+          serviceAccountName: scheduled-autoscaler-service-account
+          containers:
+          - name: scale-up-container
+            image: nginx:1.23.4
+            command:
+              - bash
+            args:
+              - kubectl scale --replicas=2 deployment/webapp-deployment
+          restartPolicy: OnFailure
+          
 ---
 
-apiVersion: autoscaling/v2beta2
+apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: webapp-deployment
@@ -121,7 +140,7 @@ spec:
                 operator: In
                 values:
                 - webapp
-            topologyKey: "kubernetes.io/webapphostname"
+            topologyKey: kubernetes.io/hostname
         # 2. Хотим распределять Pod-ы по AZ равномерно
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
